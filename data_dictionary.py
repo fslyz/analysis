@@ -5,6 +5,7 @@ from langchain_openai.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from config import DEFAULT_OUTPUT_DIR, MODEL_NAME
+from typing import List, Dict
 
 # 初始化模型和链
 chat = ChatOpenAI(model=MODEL_NAME)
@@ -61,7 +62,7 @@ DATA_ANALYSIS_PROMPT = PromptTemplate(
    - 所有字段类型都必须填写一个合适的长度值，不得留空或填写"-"
    - 对于字符类型(CHAR, VARCHAR, TEXT)，根据实际数据长度指定合适的长度，考虑未来可能的扩展
    - 对于整数类型(INT, BIGINT, TINYINT, SMALLINT)，填写该类型的标准位数(如INT:11, BIGINT:20, TINYINT:4, SMALLINT:6)
-   - 对于浮点数类型(FLOAT, DOUBLE)，填写总位数和小数位数(如FLOAT:10,2，DOUBLE:20,5)
+   - 对于浮点数类型(FLOAT, DOUBLE)，填写总位数，并对小数位数进行向上取整(如FLOAT:12，DOUBLE:25)
    - 对于日期类型(DATE)，填写固定长度10(YYYY-MM-DD格式)
    - 对于时间戳类型(TIMESTAMP)，填写固定长度19(YYYY-MM-DD HH:MM:SS格式)
    - 长度值必须基于实际数据样本和字段类型特性综合确定
@@ -110,11 +111,11 @@ data_analysis_chain = DATA_ANALYSIS_PROMPT | chat | output_parser
 def analyze_dataset(dataset_name, data_sample=None, dataframe=None, max_retries=3):
     """分析数据集并返回JSON结果"""
     print(f"=== {dataset_name} 数据字典分析 ===")
-    
+
     # 从DataFrame生成数据样本
     if dataframe is not None and data_sample is None:
         data_sample = dataframe.head(20).to_string(index=True)
-    
+
     # 尝试获取有效响应
     for attempt in range(max_retries):
         try:
@@ -130,6 +131,7 @@ def analyze_dataset(dataset_name, data_sample=None, dataframe=None, max_retries=
         except Exception as e:
             print(f"尝试 {attempt+1}/{max_retries}: 发生错误 - {str(e)}")
     return None
+
 def extract_json(text):
     """从文本中提取JSON对象"""
     try:
@@ -146,33 +148,98 @@ def extract_json(text):
                 pass
     return None
 
+def format_data_for_table(df: pd.DataFrame) -> List[List]:
+    """格式化数据用于表格展示，包括标题行、空行、字段名称和数据
+
+    Args:
+        df: 原始数据DataFrame
+
+    Returns:
+        格式化后的二维列表，第一行为"数据要素"，第二行为空行，第三行为字段名称，后续为数据行
+    """
+    if df.empty:
+        return []
+
+    # 创建表格行数据
+    result = []
+    num_columns = len(df.columns)
+
+    # 第一行：合并所有单元格，内容为"数据要素"
+    title_row = ["数据要素"] + [""] * (num_columns - 1)
+    result.append(title_row)
+
+    # 第二行：合并所有单元格，内容为空
+    empty_row = [""] * num_columns
+    result.append(empty_row)
+
+    # 第三行：字段名称
+    field_names = list(df.columns)
+    result.append(field_names)
+
+    # 添加数据行
+    for _, row in df.iterrows():
+        result.append(row.tolist())
+
+    return result
+
 def save_to_excel(json_data, dataset_name):
-    """将JSON数据保存为Excel文件"""
+    """将JSON数据保存为Excel文件，使用自定义表格格式"""
     os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
-    
+
     if not json_data:
         print("无有效数据可保存")
         return None
-    
+
     # 提取字典列表
     rules = json_data.get("algorithm_rules", [])
     if not rules:
         print("未找到数据字典")
         return None
-    
-    # 创建DataFrame并保存
+
+    # 创建DataFrame
     df = pd.DataFrame(rules)
+
+    # 格式化数据
+    formatted_data = format_data_for_table(df)
+
+    # 创建新的DataFrame用于导出
+    formatted_df = pd.DataFrame(formatted_data)
+
     filename = f"{dataset_name}_数据字典.xlsx"
     filepath = os.path.join(DEFAULT_OUTPUT_DIR, filename)
-    df.to_excel(filepath, index=False)
-    
+
+    # 使用ExcelWriter进行更精细的控制
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment
+
+    wb = Workbook()
+    ws = wb.active
+
+    # 写入数据
+    for row_idx, row in enumerate(formatted_data, 1):
+        for col_idx, value in enumerate(row, 1):
+            ws.cell(row=row_idx, column=col_idx, value=value)
+
+    # 合并第一行单元格
+    ws.merge_cells(start_row=1, end_row=1, start_column=1, end_column=len(df.columns))
+
+    # 合并第二行单元格
+    ws.merge_cells(start_row=2, end_row=2, start_column=1, end_column=len(df.columns))
+
+    # 设置第一行格式
+    first_row_cell = ws.cell(row=1, column=1)
+    first_row_cell.alignment = Alignment(horizontal='center')
+
+    # 保存文件
+    wb.save(filepath)
+
     print(f"数据字典已保存至: {filepath}")
     return filepath
 
 if __name__ == "__main__":
     import sys
     from data_reader import read_file_data
-    
+
     # 获取数据文件
     if len(sys.argv) > 1:
         file_path = sys.argv[1]
@@ -181,7 +248,7 @@ if __name__ == "__main__":
     else:
         # 通过data_reader的交互式功能获取文件路径和数据
         df, dataset_name = read_file_data()
-    
+
     try:
         # 分析数据并保存结果
         data_sample = df.head(20).to_string(index=False)
