@@ -2,7 +2,7 @@
 import asyncio
 import os
 from data_reader import read_file_data
-from data_algorithm import analyze_dataset as algorithm_analyze, save_to_excel as algorithm_save
+from data_algorithm import analyze_dataset as algorithm_analyze, save_to_pdf as algorithm_save
 from data_collection import analyze_dataset as collection_analyze, save_to_text as collection_save
 from data_dictionary import analyze_dataset as dictionary_analyze, save_to_excel as dictionary_save
 from data_application import analyze_dataset as application_analyze, save_to_text as application_save
@@ -36,7 +36,7 @@ async def main():
     # 保存算法规则表
     if results[0]:
         algorithm_path = algorithm_save(results[0], dataset_name)
-        print(f"算法规则表已保存至: {algorithm_path}")
+        print(f"算法规则已保存至: {algorithm_path}")
     else:
         print("算法处理结果为空，未能保存")
     # 保存数据收集情况
