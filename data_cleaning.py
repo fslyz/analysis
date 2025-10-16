@@ -4,14 +4,9 @@ import pandas as pd
 import os
 import sqlite3
 import tempfile
-import asyncio
-import re
+import time
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
-from langchain_community.utilities import SQLDatabase
-from langchain_community.agent_toolkits.sql.base import create_sql_agent
-from langchain.agents import AgentExecutor
-from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from openpyxl import Workbook
 from openpyxl.styles import Border, Side, Alignment
 from openpyxl.utils.dataframe import dataframe_to_rows
@@ -42,6 +37,9 @@ class DataProcessor:
         )
         # 确保输出目录存在
         self._ensure_output_directory()
+        # 存储数据库连接引用
+        self.raw_connection = None
+        self.current_table_name = None
 
     def _ensure_output_directory(self):
         """确保输出目录存在"""
@@ -52,8 +50,8 @@ class DataProcessor:
             print(f"创建输出目录失败: {str(e)}")
             raise
 
-    def create_temp_sql_db(self, file_path):
-        """创建临时数据库并导入数据"""
+    def create_in_memory_db(self, file_path, sample_ratio=1.0):
+        """创建内存数据库并导入数据"""
         try:
             # 读取数据文件
             if file_path.endswith('.csv'):
@@ -63,83 +61,218 @@ class DataProcessor:
             else:
                 return None, "错误：仅支持CSV和Excel格式"
 
-            # 创建临时数据库
-            temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
-            temp_db.close()
+            print(f"原始数据集大小: {len(df)}行, {len(df.columns)}列")
 
-            # 导入数据
-            conn = sqlite3.connect(temp_db.name)
-            table_name = re.sub(r'[^a-zA-Z0-9_]', '_', 
-                               os.path.splitext(os.path.basename(file_path))[0])
+            # 大型数据集抽样处理
+            if len(df) > 10000 and sample_ratio < 1.0:
+                print(f"检测到大型数据集，使用{int(sample_ratio*100)}%抽样数据加速处理")
+                df = df.sample(frac=sample_ratio, random_state=42)
+                print(f"抽样后数据集大小: {len(df)}行")
+
+            # 创建内存数据库
+            conn = sqlite3.connect(":memory:")
+            self.raw_connection = conn
+            
+            # 优化数据库写入性能
+            conn.execute("PRAGMA synchronous = OFF")
+            conn.execute("PRAGMA journal_mode = MEMORY")
+            
+            # 生成安全的表名
+            table_name = "data_table"
+            self.current_table_name = table_name
+            
+            # 写入数据到内存表
             df.to_sql(table_name, conn, if_exists='replace', index=False)
-            conn.close()
-
-            db = SQLDatabase.from_uri(f"sqlite:///{temp_db.name}")
-            return db, temp_db.name, df, table_name
+            
+            print(f"数据已导入内存数据库，表名: {table_name}")
+            print(f"列信息: {', '.join(df.columns.tolist())}")
+            
+            return df, table_name
 
         except Exception as e:
-            return None, f"创建数据库失败: {str(e)}"
+            self._cleanup_connections()
+            return None, f"创建内存数据库失败: {str(e)}"
 
-    def apply_pandas_cleaning(self, df, cleaning_operations):
-        """执行数据清洗"""
+    def get_basic_info(self, table_name):
+        """获取基本信息"""
         try:
-            for operation in cleaning_operations:
-                op_type = operation.get('type')
-
-                if op_type == 'remove_duplicates':
-                    subset = operation.get('subset')
-                    keep = operation.get('keep', 'first')
-                    df = df.drop_duplicates(subset=subset, keep=keep)
-
-                elif op_type == 'fill_missing':
-                    column = operation.get('column')
-                    method = operation.get('method', 'mean')
-                    value = operation.get('value')
-
-                    if method == 'mean':
-                        df[column].fillna(df[column].mean(), inplace=True)
-                    elif method == 'median':
-                        df[column].fillna(df[column].median(), inplace=True)
-                    elif method == 'mode':
-                        df[column].fillna(df[column].mode()[0], inplace=True)
-                    elif method == 'forward_fill':
-                        df[column].fillna(method='ffill', inplace=True)
-                    elif method == 'backward_fill':
-                        df[column].fillna(method='bfill', inplace=True)
-                    elif value is not None:
-                        df[column].fillna(value, inplace=True)
-
-                elif op_type == 'remove_outliers':
-                    column = operation.get('column')
-                    Q1 = df[column].quantile(0.25)
-                    Q3 = df[column].quantile(0.75)
-                    IQR = Q3 - Q1
-                    lower_bound = Q1 - 1.5 * IQR
-                    upper_bound = Q3 + 1.5 * IQR
-                    df = df[(df[column] >= lower_bound) & (df[column] <= upper_bound)]
-
-                elif op_type == 'normalize_text':
-                    column = operation.get('column')
-                    for op in operation.get('operations', []):
-                        if op == 'lower':
-                            df[column] = df[column].str.lower()
-                        elif op == 'upper':
-                            df[column] = df[column].str.upper()
-                        elif op == 'strip':
-                            df[column] = df[column].str.strip()
-                        elif op == 'remove_punctuation':
-                            import string
-                            df[column] = df[column].str.translate(
-                                str.maketrans('', '', string.punctuation))
-
-            return df
+            # 行数
+            row_count_query = f"SELECT COUNT(*) as 行数 FROM {table_name}"
+            row_count = pd.read_sql_query(row_count_query, self.raw_connection)
+            
+            # 列信息
+            column_info = pd.read_sql_query(f"PRAGMA table_info({table_name})", self.raw_connection)
+            
+            result = f"表名: {table_name}\n"
+            result += f"行数: {row_count.iloc[0, 0]}\n"
+            result += f"列数: {len(column_info)}\n"
+            result += "列信息:\n"
+            
+            for _, row in column_info.iterrows():
+                result += f"  - {row['name']} ({row['type']})\n"
+                
+            return result
         except Exception as e:
-            print(f"清洗出错: {str(e)}")
-            return df
+            return f"获取基本信息失败: {str(e)}"
 
-    def _create_temp_excel(self, df):
+    def get_missing_value_analysis(self, table_name):
+        """缺失值分析 - 修复版本"""
+        try:
+            column_info = pd.read_sql_query(f"PRAGMA table_info({table_name})", self.raw_connection)
+            result = "缺失值分析:\n"
+            
+            total_count_query = f"SELECT COUNT(*) as total FROM {table_name}"
+            total_count = pd.read_sql_query(total_count_query, self.raw_connection)
+            total_rows = total_count.iloc[0, 0]
+            
+            for _, row in column_info.iterrows():
+                col_name = row['name']
+                # 检查该列的缺失值数量
+                missing_query = f"SELECT COUNT(*) as missing FROM {table_name} WHERE `{col_name}` IS NULL"
+                missing_count = pd.read_sql_query(missing_query, self.raw_connection)
+                missing_num = missing_count.iloc[0, 0]
+                missing_ratio = (missing_num / total_rows) * 100 if total_rows > 0 else 0
+                result += f"  - {col_name}: {missing_num} 个缺失值 ({missing_ratio:.2f}%)\n"
+                
+            return result
+        except Exception as e:
+            return f"缺失值分析失败: {str(e)}"
+
+    def get_duplicate_analysis(self, table_name):
+        """重复数据分析 - 修复版本"""
+        try:
+            column_info = pd.read_sql_query(f"PRAGMA table_info({table_name})", self.raw_connection)
+            
+            # 获取所有列名
+            columns = [row['name'] for _, row in column_info.iterrows()]
+            columns_str = ", ".join([f"`{col}`" for col in columns])
+            
+            # 检查完全重复的行
+            duplicate_query = f"""
+            SELECT COUNT(*) as duplicate_count 
+            FROM (
+                SELECT {columns_str}, COUNT(*) as cnt 
+                FROM {table_name} 
+                GROUP BY {columns_str} 
+                HAVING cnt > 1
+            )
+            """
+            
+            duplicate_result = pd.read_sql_query(duplicate_query, self.raw_connection)
+            duplicate_count = duplicate_result.iloc[0, 0]
+            
+            result = "重复数据分析:\n"
+            result += f"完全重复的行数: {duplicate_count}\n"
+            
+            # 检查关键字段的重复（比如序号）
+            if any('序号' in col for col in columns):
+                id_col = [col for col in columns if '序号' in col][0]
+                id_duplicate_query = f"""
+                SELECT COUNT(*) as duplicate_ids 
+                FROM (
+                    SELECT `{id_col}`, COUNT(*) as cnt 
+                    FROM {table_name} 
+                    GROUP BY `{id_col}` 
+                    HAVING cnt > 1
+                )
+                """
+                id_duplicate_result = pd.read_sql_query(id_duplicate_query, self.raw_connection)
+                duplicate_ids = id_duplicate_result.iloc[0, 0]
+                result += f"序号重复的数量: {duplicate_ids}\n"
+                
+            return result
+        except Exception as e:
+            return f"重复数据分析失败: {str(e)}"
+
+    def get_numeric_analysis(self, table_name):
+        """数值列分析 - 修复版本"""
+        try:
+            column_info = pd.read_sql_query(f"PRAGMA table_info({table_name})", self.raw_connection)
+            result = "数值列分析:\n"
+            
+            # 识别数值列
+            numeric_columns = []
+            for _, row in column_info.iterrows():
+                col_type = row['type'].upper()
+                col_name = row['name']
+                if 'INT' in col_type or 'REAL' in col_type or 'FLOAT' in col_type or 'NUM' in col_type:
+                    numeric_columns.append(col_name)
+                # 如果列名包含数字相关的词，也认为是数值列
+                elif any(keyword in col_name.lower() for keyword in ['宽度', '高度', '坐标', '序号', '数量', '值']):
+                    numeric_columns.append(col_name)
+            
+            for col in numeric_columns:
+                try:
+                    stats_query = f"""
+                    SELECT 
+                        COUNT(`{col}`) as 非空数量,
+                        MIN(`{col}`) as 最小值, 
+                        MAX(`{col}`) as 最大值, 
+                        AVG(`{col}`) as 平均值,
+                        SUM(CASE WHEN `{col}` IS NULL THEN 1 ELSE 0 END) as 空值数量
+                    FROM {table_name}
+                    """
+                    stats = pd.read_sql_query(stats_query, self.raw_connection)
+                    if hasattr(stats, 'iloc'):
+                        count_val = stats.iloc[0, 0]
+                        min_val = stats.iloc[0, 1]
+                        max_val = stats.iloc[0, 2]
+                        avg_val = stats.iloc[0, 3]
+                        null_count = stats.iloc[0, 4]
+                        result += f"  - {col}: 值范围[{min_val}, {max_val}], 平均值={avg_val:.2f}, 非空值={count_val}, 空值={null_count}\n"
+                except Exception as col_error:
+                    result += f"  - {col}: 分析出错 - {str(col_error)}\n"
+                    
+            return result
+        except Exception as e:
+            return f"数值列分析失败: {str(e)}"
+
+    def get_text_analysis(self, table_name):
+        """文本列分析 - 修复版本"""
+        try:
+            column_info = pd.read_sql_query(f"PRAGMA table_info({table_name})", self.raw_connection)
+            result = "文本列分析:\n"
+            
+            # 识别文本列和可能的文本列
+            text_columns = []
+            
+            for _, row in column_info.iterrows():
+                col_type = row['type'].upper()
+                col_name = row['name']
+                if 'TEXT' in col_type or 'CHAR' in col_type:
+                    text_columns.append(col_name)
+            
+            if not text_columns:
+                result += "  未发现文本列，所有列均为数值类型\n"
+                return result
+            
+            # 分析文本列
+            for col in text_columns:
+                try:
+                    # 唯一值数量
+                    distinct_query = f"SELECT COUNT(DISTINCT `{col}`) as distinct_count FROM {table_name}"
+                    distinct_result = pd.read_sql_query(distinct_query, self.raw_connection)
+                    distinct_count = distinct_result.iloc[0, 0]
+                    
+                    # 样本值
+                    sample_query = f"SELECT `{col}` FROM {table_name} WHERE `{col}` IS NOT NULL LIMIT 5"
+                    sample_result = pd.read_sql_query(sample_query, self.raw_connection)
+                    sample_values = sample_result[col].tolist()
+                    
+                    result += f"  - {col}: {distinct_count} 个唯一值, 样本: {sample_values}\n"
+                except Exception as col_error:
+                    result += f"  - {col}: 分析出错\n"
+            
+            return result
+        except Exception as e:
+            return f"文本列分析失败: {str(e)}"
+
+    def _create_temp_excel(self, df, max_rows=200):
         """创建临时Excel（优化格式）"""
         try:
+            # 限制最大行数，避免生成过大文件
+            df = df.head(max_rows)
+            
             with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as temp_excel:
                 temp_path = temp_excel.name
 
@@ -152,7 +285,7 @@ class DataProcessor:
                 for col_idx, cell_value in enumerate(row_data, 1):
                     value = str(cell_value) if pd.notna(cell_value) else ""
                     cell = ws.cell(row=row_idx, column=col_idx, value=value)
-                    # 关键：文字自动换行
+                    # 文字自动换行
                     cell.alignment = Alignment(
                         wrap_text=True,
                         vertical='center',
@@ -216,8 +349,6 @@ class DataProcessor:
             'C:/Windows/Fonts/simhei.ttf',
             'C:/Windows/Fonts/msyh.ttf',
             'C:/Windows/Fonts/simsun.ttc',
-            '/Library/Fonts/PingFang.ttc',
-            '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
         ]
         for font_path in font_candidates:
             if os.path.exists(font_path):
@@ -303,51 +434,33 @@ class DataProcessor:
             else:
                 pdf.set_font('Arial', size=9)
 
-            # 计算单页最大列数
-            page_width = pdf.w - 20
-            col_width = 18
-            max_cols_per_page = int(page_width // col_width)
+            # 计算列宽
+            col_width = 25
+            # 表头
+            pdf.set_fill_color(240, 240, 240)
+            for col_name in df.columns:
+                pdf.cell(col_width, 10, str(col_name), border=1, fill=True)
+            pdf.ln()
 
-            # 拆分列组（实现右侧分页）
-            columns = list(df.columns)
-            col_groups = [
-                columns[i:i + max_cols_per_page] 
-                for i in range(0, len(columns), max_cols_per_page)
-            ]
-
-            # 生成每页内容
-            for group_idx, col_group in enumerate(col_groups, 1):
-                if group_idx > 1:
+            # 数据行
+            pdf.set_fill_color(255, 255, 255)
+            for _, row in df.iterrows():
+                if pdf.get_y() > 270:  # 换页检查
                     pdf.add_page()
-                    pdf.set_font(font_name, size=9)
-
-                # 表头
-                pdf.set_fill_color(240, 240, 240)
-                for col_name in col_group:
-                    pdf.multi_cell(col_width, 8, str(col_name), border=1, 
-                                  align='C', fill=True, ln=3)
-                pdf.ln()
-
-                # 数据行
-                pdf.set_fill_color(255, 255, 255)
-                for _, row in df.iterrows():
-                    if pdf.get_y() > 270:
-                        pdf.add_page()
-                        pdf.set_font(font_name, size=9)
-                        # 重新打印表头
-                        pdf.set_fill_color(240, 240, 240)
-                        for col_name in col_group:
-                            pdf.multi_cell(col_width, 8, str(col_name), border=1, 
-                                          align='C', fill=True, ln=3)
-                        pdf.ln()
-                        pdf.set_fill_color(255, 255, 255)
-
-                    # 写入数据
-                    for col_name in col_group:
-                        value = str(row[col_name]) if pd.notna(row[col_name]) else ""
-                        pdf.multi_cell(col_width, 8, value, border=1, 
-                                      align='L', fill=False, ln=3)
+                    # 重新打印表头
+                    pdf.set_fill_color(240, 240, 240)
+                    for col_name in df.columns:
+                        pdf.cell(col_width, 10, str(col_name), border=1, fill=True)
                     pdf.ln()
+                    pdf.set_fill_color(255, 255, 255)
+                
+                for col_name in df.columns:
+                    value = str(row[col_name]) if pd.notna(row[col_name]) else ""
+                    # 截断过长的值
+                    if len(value) > 20:
+                        value = value[:20] + "..."
+                    pdf.cell(col_width, 10, value, border=1)
+                pdf.ln()
 
             pdf.output(pdf_path)
             print(f"PDF生成成功: {pdf_path}")
@@ -356,26 +469,15 @@ class DataProcessor:
             print(f"FPDF转换出错: {str(e)}")
             return False
 
-    async def _execute_query(self, agent_executor, prompt, query_name):
-        """执行查询"""
-        print(f"===== 执行查询：{query_name} =====")
-        try:
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None, lambda: agent_executor.invoke(prompt)
-            )
-            return query_name, result['output']
-        except Exception as e:
-            print(f"查询出错: {str(e)}")
-            return query_name, f"查询失败: {str(e)}"
-
-    async def _analyze_and_generate_sql(self, query_results):
+    def _analyze_and_generate_sql(self, query_results, table_name):
         """分析数据并生成清洗SQL"""
         print("===== 分析数据质量 =====")
         
         analysis_prompt = f"""
         基于以下查询结果，分析数据质量并生成清洗SQL：
 
+        表名: {table_name}
+        
         基本信息：{query_results.get('基本信息', '无')}
         缺失值：{query_results.get('缺失值分析', '无')}
         重复数据：{query_results.get('重复数据分析', '无')}
@@ -394,95 +496,58 @@ class DataProcessor:
             HumanMessage(content=analysis_prompt)
         ]
 
-        response = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: self.llm(messages)
-        )
+        response = self.llm.invoke(messages)
         return response.content
 
-    def _extract_sql_statements(self, analysis_text):
-        """提取SQL语句"""
-        sql_pattern = r'EXECUTE SQL:\s*(.*?)(?=\n(?:EXECUTE SQL:|$))'
-        sql_matches = re.findall(sql_pattern, analysis_text, re.DOTALL)
-        
-        return [
-            '\n'.join(line.strip() for line in match.split('\n') if line.strip())
-            for match in sql_matches if match.strip()
-        ]
-
-    async def _execute_sql_modifications(self, agent_executor, sql_statements, table_name):
-        """执行SQL清洗"""
-        if not sql_statements:
-            print("无清洗语句")
-            return
-
-        print(f"===== 执行{len(sql_statements)}条清洗SQL =====")
-        for idx, sql in enumerate(sql_statements, 1):
-            print(f"\n第{idx}条SQL: {sql}")
+    def _cleanup_connections(self):
+        """清理所有数据库连接"""
+        if self.raw_connection:
             try:
-                result = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: agent_executor.invoke(f"执行SQL: {sql}")
-                )
-                print(f"结果: {result['output']}")
+                self.raw_connection.close()
             except Exception as e:
-                print(f"执行出错: {str(e)}")
+                print(f"关闭数据库连接出错: {str(e)}")
+        self.raw_connection = None
+        self.current_table_name = None
 
     def process_dataset(self, file_path):
         """主流程"""
+        temp_excel = None
+        start_time = time.time()
         try:
-            # 创建临时数据库
-            db_result = self.create_temp_sql_db(file_path)
-            if not isinstance(db_result, tuple) or len(db_result) < 4:
+            # 创建内存数据库
+            db_result = self.create_in_memory_db(file_path)
+            if not isinstance(db_result, tuple) or len(db_result) < 2:
                 return db_result[1] if isinstance(db_result, tuple) else str(db_result)
 
-            db, temp_db_path, _, table_name = db_result
+            df, table_name = db_result
 
-            # 创建SQL代理
-            toolkit = SQLDatabaseToolkit(db=db, llm=self.llm)
-            agent_executor = create_sql_agent(
-                llm=self.llm,
-                toolkit=toolkit,
-                verbose=True,
-                agent_type="openai-tools",
-            )
+            print("===== 开始执行数据查询 =====")
 
-            # 执行查询
-            queries = [
-                ("基本信息", f"查询'{table_name}'的行数、列数、列名和类型"),
-                ("缺失值分析", f"统计'{table_name}'每列缺失值数量和比例"),
-                ("重复数据分析", f"检查'{table_name}'重复数据情况"),
-                ("数值列分析", f"分析'{table_name}'数值列统计信息"),
-                ("文本列分析", f"分析'{table_name}'文本列格式")
-            ]
-
-            async def run_queries():
-                return await asyncio.gather(*[
-                    self._execute_query(agent_executor, prompt, name)
-                    for name, prompt in queries
-                ])
-
-            query_results = dict(asyncio.run(run_queries()))
+            # 同步执行查询
+            query_results = {}
+            
+            print("===== 执行查询：基本信息 =====")
+            query_results['基本信息'] = self.get_basic_info(table_name)
+            
+            print("===== 执行查询：缺失值分析 =====")
+            query_results['缺失值分析'] = self.get_missing_value_analysis(table_name)
+            
+            print("===== 执行查询：重复数据分析 =====")
+            query_results['重复数据分析'] = self.get_duplicate_analysis(table_name)
+            
+            print("===== 执行查询：数值列分析 =====")
+            query_results['数值列分析'] = self.get_numeric_analysis(table_name)
+            
+            print("===== 执行查询：文本列分析 =====")
+            query_results['文本列分析'] = self.get_text_analysis(table_name)
 
             # 分析并生成清洗SQL
-            analysis_result = asyncio.run(self._analyze_and_generate_sql(query_results))
-            sql_statements = self._extract_sql_statements(analysis_result)
+            analysis_result = self._analyze_and_generate_sql(query_results, table_name)
 
-            # 执行清洗并验证
-            async def process_cleaning():
-                if sql_statements:
-                    await self._execute_sql_modifications(agent_executor, sql_statements, table_name)
-                    verification = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: agent_executor.invoke(f"验证'{table_name}'清洗效果")
-                    )
-                    return verification['output']
-                return "未执行清洗"
-
-            verification_result = asyncio.run(process_cleaning())
+            # 获取最终数据
+            final_df = pd.read_sql(f"SELECT * FROM {table_name}", self.raw_connection)
 
             # 生成PDF
-            conn = sqlite3.connect(temp_db_path)
-            final_df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
-            conn.close()
-
             temp_excel = self._create_temp_excel(final_df)
             if not temp_excel:
                 return "生成PDF失败：临时Excel创建失败"
@@ -492,13 +557,15 @@ class DataProcessor:
 
             pdf_success = self._excel_to_pdf(temp_excel, pdf_path)
 
-            # 清理临时文件
-            try:
+            # 清理资源
+            self._cleanup_connections()
+            if temp_excel and os.path.exists(temp_excel):
                 os.remove(temp_excel)
-                os.remove(temp_db_path)
-            except Exception as e:
-                print(f"清理临时文件出错: {str(e)}")
 
+            # 计算总运行时间
+            end_time = time.time()
+            total_time = end_time - start_time
+            
             if pdf_success:
                 return f"""
 ===== 处理完成 =====
@@ -509,14 +576,23 @@ class DataProcessor:
 2. 分析与清洗建议:
 {analysis_result}
 
-3. 清洗验证:
-{verification_result}
-
-4. 输出文件:
+3. 输出文件:
 {pdf_path}
+
+4. 运行时间:
+总耗时: {total_time:.2f} 秒
 """
         except Exception as e:
-            return f"处理出错: {str(e)}"
+            end_time = time.time()
+            total_time = end_time - start_time
+            
+            self._cleanup_connections()
+            if temp_excel and os.path.exists(temp_excel):
+                try:
+                    os.remove(temp_excel)
+                except:
+                    pass
+            return f"处理出错: {str(e)}\n运行时间: {total_time:.2f} 秒"
 
 if __name__ == "__main__":
     processor = DataProcessor()
