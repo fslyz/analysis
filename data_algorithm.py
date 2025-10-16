@@ -66,9 +66,6 @@ DATA_ANALYSIS_PROMPT = PromptTemplate(
 """
 )
 
-
-
-
 data_analysis_chain = DATA_ANALYSIS_PROMPT | chat | output_parser
 
 def analyze_dataset(data_sample=None, dataframe=None, max_retries=3):
