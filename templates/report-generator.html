@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>数据报告生成工具</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+  <style>
+    :root {
+      --primary-green: #10b981;
+      --light-green: #d1fae5;
+      --dark-green: #059669;
+      --pale-green: #f0fdf4;
+      --medium-green: #34d399;
+    }
+    
+    .bg-green-gradient {
+      background: linear-gradient(135deg, #10b981, #059669);
+    }
+    
+    .text-primary-green {
+      color: var(--primary-green);
+    }
+    
+    .border-primary-green {
+      border-color: var(--primary-green);
+    }
+    
+    .hover-lift {
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    
+    .hover-lift:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 10px 25px -5px rgba(16, 185, 129, 0.1), 0 8px 10px -6px rgba(16, 185, 129, 0.1);
+    }
+    
+    .pulse-animation {
+      animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+      }
+      70% {
+        box-shadow: 0 0 0 10px rgba(16, 185, 129, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+      }
+    }
+    
+    .gradient-text {
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+      background-image: linear-gradient(135deg, #10b981, #059669);
+    }
+    
+    .wave-bg {
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .wave-bg::after {
+      content: "";
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 12px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1440 320'%3E%3Cpath fill='%23ffffff' fill-opacity='1' d='M0,128L48,144C96,160,192,192,288,197.3C384,203,480,181,576,181.3C672,181,768,203,864,197.3C960,192,1056,160,1152,149.3C1248,139,1344,149,1392,154.7L1440,160L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z'%3E%3C/path%3E%3C/svg%3E");
+      background-size: 1440px 12px;
+      background-repeat: no-repeat;
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-green-50 to-green-100 min-h-screen flex flex-col">
+  <!-- 页眉 -->
+  <header class="bg-green-gradient text-white py-5 shadow-md wave-bg">
+    <div class="container mx-auto px-6 flex flex-col md:flex-row justify-between items-center">
+      <div class="flex items-center mb-3 md:mb-0">
+        <i class="fa fa-bar-chart text-3xl mr-3 text-green-100"></i>
+        <h1 class="text-2xl font-bold tracking-tight">数据报告生成工具</h1>
+      </div>
+      <div class="text-green-100/90 flex items-center">
+        <i class="fa fa-leaf mr-2 pulse-animation"></i>
+        <span>专业数据分析平台</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主要内容 -->
+  <main class="container mx-auto px-6 py-12 flex-grow">
+    <div class="max-w-3xl mx-auto">
+      <!-- 页面标题 -->
+      <div class="text-center mb-10">
+        <h2 class="text-[clamp(1.5rem,3vw,2.5rem)] font-bold gradient-text mb-3">快速生成专业数据报告</h2>
+        <p class="text-gray-600 max-w-xl mx-auto">上传您的CSV或Excel文件，我们将自动分析数据并生成全面、直观的报告，助您轻松洞察数据价值</p>
+      </div>
+    
+      <!-- 拖拽上传区域 -->
+      <div class="bg-white rounded-2xl shadow-lg p-8 mb-10 transform transition-all duration-500 hover:shadow-xl">
+        <div id="dropArea" class="border-2 border-dashed border-primary-green/60 rounded-xl p-12 text-center transition-all duration-300 hover:bg-pale-green hover:border-primary-green">
+          <div class="mb-6 inline-block bg-light-green p-5 rounded-full">
+            <i class="fa fa-cloud-upload text-5xl text-primary-green"></i>
+          </div>
+          <p class="text-gray-700 mb-6 text-lg">拖拽数据集文件到此处，或</p>
+          <label class="bg-green-gradient text-white px-8 py-4 rounded-lg cursor-pointer hover:shadow-md transition-all duration-300 inline-block hover-lift font-medium">
+            <i class="fa fa-file-excel-o mr-2"></i>选择数据集
+            <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" class="hidden">
+          </label>
+          <p id="fileInfo" class="mt-5 text-primary-green font-medium hidden flex items-center justify-center">
+            <i class="fa fa-check-circle mr-2"></i>
+            <span></span>
+          </p>
+          <div class="mt-6 text-sm text-gray-500">
+            <i class="fa fa-info-circle mr-1"></i>
+            支持格式: CSV, XLS, XLSX (最大支持20MB)
+          </div>
+        </div>
+      </div>
+
+      <!-- 进度显示 -->
+      <div id="progressContainer" class="mb-10 hidden bg-white rounded-xl shadow p-6 transform transition-all duration-500 hover:shadow-md">
+        <div class="flex justify-between items-center mb-3">
+          <span id="progressText" class="text-sm text-gray-700 font-medium">处理中...</span>
+          <span id="progressPercent" class="text-sm text-primary-green font-bold">0%</span>
+        </div>
+        <div class="w-full bg-gray-100 rounded-full h-3.5 overflow-hidden">
+          <div id="progressBar" class="bg-green-gradient h-full rounded-full transition-all duration-500 ease-out" style="width: 0%"></div>
+        </div>
+        <div class="mt-3 text-xs text-gray-500 flex justify-between">
+          <span>正在分析数据</span>
+          <span id="progressStatus">准备中...</span>
+        </div>
+      </div>
+
+      <!-- 操作按钮 -->
+      <div class="flex flex-col sm:flex-row justify-center gap-4 mb-8">
+        <button id="submitBtn" class="bg-green-gradient text-white px-10 py-4 rounded-lg hover:shadow-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed font-medium disabled:shadow-none hover-lift flex items-center justify-center" disabled>
+          <i class="fa fa-cog mr-2"></i>生成报告
+        </button>
+        <button id="downloadBtn" class="bg-gradient-to-r from-medium-green to-dark-green text-white px-10 py-4 rounded-lg hover:shadow-lg transition-all duration-300 hidden font-medium hover-lift flex items-center justify-center">
+          <i class="fa fa-download mr-2"></i>下载报告包
+        </button>
+      </div>
+    </div>
+
+    </div>
+  </main>
+
+  <!-- 页脚 -->
+  <footer class="bg-green-gradient text-white py-8 mt-8">
+    <div class="container mx-auto px-6">
+      <div class="flex flex-col md:flex-row justify-between items-center">
+        <div class="mb-4 md:mb-0">
+          <p class="text-sm opacity-90">© 2025 数据分析平台 - 专业、高效、智能</p>
+        </div>
+        <div class="flex space-x-6">
+          <a href="#" class="text-green-100 hover:text-white transition-colors duration-300">
+            <i class="fa fa-question-circle"></i> 帮助中心
+          </a>
+          <a href="#" class="text-green-100 hover:text-white transition-colors duration-300">
+            <i class="fa fa-file-text-o"></i> 使用说明
+          </a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const dropArea = document.getElementById('dropArea');
+    const fileInput = document.getElementById('fileInput');
+    const fileInfo = document.getElementById('fileInfo').querySelector('span');
+    const submitBtn = document.getElementById('submitBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBar = document.getElementById('progressBar');
+    const progressPercent = document.getElementById('progressPercent');
+    const progressStatus = document.getElementById('progressStatus');
+    let selectedFile = null;
+
+    // 拖拽事件处理
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+      dropArea.addEventListener(eventName, preventDefaults, false);
+    });
+
+    function preventDefaults(e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropArea.addEventListener(eventName, highlight, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropArea.addEventListener(eventName, unhighlight, false);
+    });
+
+    function highlight() {
+      dropArea.classList.add('border-primary-green', 'bg-green-50/70');
+      dropArea.querySelector('i').classList.add('scale-110', 'transition-transform', 'duration-300');
+    }
+
+    function unhighlight() {
+      dropArea.classList.remove('border-primary-green', 'bg-green-50/70');
+      dropArea.querySelector('i').classList.remove('scale-110');
+    }
+
+    // 处理文件拖放
+    dropArea.addEventListener('drop', handleDrop, false);
+    function handleDrop(e) {
+      const dt = e.dataTransfer;
+      const file = dt.files[0];
+      handleFiles(file);
+    }
+
+    // 处理文件选择
+    fileInput.addEventListener('change', function() {
+      handleFiles(this.files[0]);
+    });
+
+    // 点击上传区域触发文件选择
+    dropArea.addEventListener('click', () => {
+      if (!selectedFile) {
+        fileInput.click();
+      }
+    });
+
+    // 文件验证与显示
+    function handleFiles(file) {
+      if (!file) return;
+      
+      // 验证文件大小
+      if (file.size > 20 * 1024 * 1024) {
+        alert('文件大小不能超过20MB');
+        return;
+      }
+      
+      // 验证文件类型
+      const validTypes = ['text/csv', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+      const validExtensions = ['.csv', '.xls', '.xlsx'];
+      const fileName = file.name.toLowerCase();
+      const isExtensionValid = validExtensions.some(ext => fileName.endsWith(ext));
+      
+      if (!validTypes.includes(file.type) && !isExtensionValid) {
+        alert('请上传CSV或Excel格式的文件');
+        return;
+      }
+      
+      selectedFile = file;
+      fileInfo.textContent = `${file.name} (${(file.size / 1024).toFixed(1)}KB)`;
+      fileInfo.parentElement.classList.remove('hidden');
+      submitBtn.removeAttribute('disabled');
+      
+      // 添加文件选择动画
+      fileInfo.parentElement.classList.add('animate-pulse');
+      setTimeout(() => {
+        fileInfo.parentElement.classList.remove('animate-pulse');
+      }, 1000);
+    }
+
+    // 提交文件到后端
+    submitBtn.addEventListener('click', async function() {
+      if (!selectedFile) return;
+
+      const formData = new FormData();
+      formData.append('dataset', selectedFile);
+
+      try {
+        progressContainer.classList.remove('hidden');
+        submitBtn.disabled = true;
+        
+        const response = await fetch('/api/generate-report', {
+          method: 'POST',
+          body: formData,
+          headers: {
+            // 不设置Content-Type，让浏览器自动处理multipart/form-data
+          },
+          signal: AbortSignal.timeout(300000) // 5分钟超时
+        });
+
+        if (!response.ok) throw new Error('处理失败');
+
+        // 处理流式进度（模拟，实际需后端配合）
+        const total = parseInt(response.headers.get('Content-Length') || '0');
+        const reader = response.body.getReader();
+        let received = 0;
+        const chunks = [];
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.length;
+          const percent = total ? Math.round((received / total) * 100) : 0;
+          progressBar.style.width = `${percent}%`;
+          progressPercent.textContent = `${percent}%`;
+        }
+
+        // 生成下载URL
+        const blob = new Blob(chunks, { type: 'application/zip' });
+        const url = URL.createObjectURL(blob);
+        
+        // 显示下载按钮
+        downloadBtn.classList.remove('hidden');
+        downloadBtn.onclick = () => {
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `数据报告_${new Date().getTime()}.zip`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url); // 释放资源
+        };
+
+      } catch (error) {
+        alert(`错误: ${error.message}`);
+      } finally {
+        progressContainer.classList.add('hidden');
+        submitBtn.disabled = false;
+      }
+    });
+    
+    // 下载按钮点击事件
+    downloadBtn.addEventListener('click', function() {
+      // 实际项目中会由上面的API请求设置点击事件
+      alert('报告下载中...（模拟）');
+    });
+  </script>
+</body>
+</html>
