@@ -509,8 +509,13 @@ class DataProcessor:
         self.raw_connection = None
         self.current_table_name = None
 
-    def process_dataset(self, file_path):
-        """主流程"""
+    def process_dataset(self, file_path, original_name=None):
+        """主流程
+        
+        参数:
+            file_path: 数据集文件路径
+            original_name: 原始文件名（不含扩展名），用于命名报告文件
+        """
         temp_excel = None
         start_time = time.time()
         try:
@@ -552,7 +557,8 @@ class DataProcessor:
             if not temp_excel:
                 return "生成PDF失败：临时Excel创建失败"
 
-            base_name = os.path.splitext(os.path.basename(file_path))[0]
+            # 使用原始文件名或从文件路径提取的名称
+            base_name = original_name if original_name else os.path.splitext(os.path.basename(file_path))[0]
             pdf_path = os.path.join(OUTPUT_PATH, f"{base_name}_样本示例.pdf")
 
             pdf_success = self._excel_to_pdf(temp_excel, pdf_path)
