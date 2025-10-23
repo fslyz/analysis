@@ -18,7 +18,16 @@ def read_data(file_path):
     
     ext = os.path.splitext(file_path)[1].lower()
     if ext == ".xlsx":
-        return pd.read_excel(file_path, engine="openpyxl")
+        try:
+            return pd.read_excel(file_path, engine="openpyxl")
+        except Exception as e:
+            print(f"读取Excel文件出错: {e}")
+            # 尝试使用其他引擎
+            try:
+                return pd.read_excel(file_path)
+            except Exception as e2:
+                print(f"使用默认引擎读取Excel文件也失败: {e2}")
+                raise
     elif ext == ".csv":
         # 自动检测编码并读取CSV
         with open(file_path, 'rb') as f:
