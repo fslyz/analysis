@@ -2,6 +2,8 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
   <title>数据报告生成工具</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
@@ -13,32 +15,32 @@
       --pale-green: #f0fdf4;
       --medium-green: #34d399;
     }
-    
+
     .bg-green-gradient {
       background: linear-gradient(135deg, #10b981, #059669);
     }
-    
+
     .text-primary-green {
       color: var(--primary-green);
     }
-    
+
     .border-primary-green {
       border-color: var(--primary-green);
     }
-    
+
     .hover-lift {
       transition: transform 0.3s ease, box-shadow 0.3s ease;
     }
-    
+
     .hover-lift:hover {
       transform: translateY(-3px);
       box-shadow: 0 10px 25px -5px rgba(16, 185, 129, 0.1), 0 8px 10px -6px rgba(16, 185, 129, 0.1);
     }
-    
+
     .pulse-animation {
       animation: pulse 2s infinite;
     }
-    
+
     @keyframes pulse {
       0% {
         box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
@@ -50,19 +52,19 @@
         box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
       }
     }
-    
+
     .gradient-text {
       background-clip: text;
       -webkit-background-clip: text;
       color: transparent;
       background-image: linear-gradient(135deg, #10b981, #059669);
     }
-    
+
     .wave-bg {
       position: relative;
       overflow: hidden;
     }
-    
+
     .wave-bg::after {
       content: "";
       position: absolute;
@@ -73,6 +75,15 @@
       background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1440 320'%3E%3Cpath fill='%23ffffff' fill-opacity='1' d='M0,128L48,144C96,160,192,192,288,197.3C384,203,480,181,576,181.3C672,181,768,203,864,197.3C960,192,1056,160,1152,149.3C1248,139,1344,149,1392,154.7L1440,160L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z'%3E%3C/path%3E%3C/svg%3E");
       background-size: 1440px 12px;
       background-repeat: no-repeat;
+    }
+
+    .success-message {
+      animation: fadeIn 0.5s ease-in-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
     }
   </style>
 </head>
@@ -99,27 +110,48 @@
         <h2 class="text-[clamp(1.5rem,3vw,2.5rem)] font-bold gradient-text mb-3">快速生成专业数据报告</h2>
         <p class="text-gray-600 max-w-xl mx-auto">上传您的CSV或Excel文件，我们将自动分析数据并生成全面、直观的报告，助您轻松洞察数据价值</p>
       </div>
-    
+
       <!-- 拖拽上传区域 -->
-      <div class="bg-white rounded-2xl shadow-lg p-8 mb-10 transform transition-all duration-500 hover:shadow-xl">
-        <div id="dropArea" class="border-2 border-dashed border-primary-green/60 rounded-xl p-12 text-center transition-all duration-300 hover:bg-pale-green hover:border-primary-green">
-          <div class="mb-6 inline-block bg-light-green p-5 rounded-full">
+      <div class="bg-white rounded-2xl shadow-lg p-8 mb-6 transform transition-all duration-500 hover:shadow-xl">
+        <div id="dropArea" class="border-2 border-dashed border-primary-green/60 rounded-xl p-8 text-center transition-all duration-300 hover:bg-pale-green hover:border-primary-green relative">
+          <div id="uploadIcon" class="mb-6 inline-block bg-light-green p-5 rounded-full opacity-30 transition-opacity duration-300">
             <i class="fa fa-cloud-upload text-5xl text-primary-green"></i>
           </div>
-          <p class="text-gray-700 mb-6 text-lg">拖拽数据集文件到此处，或</p>
-          <label class="bg-green-gradient text-white px-8 py-4 rounded-lg cursor-pointer hover:shadow-md transition-all duration-300 inline-block hover-lift font-medium">
-            <i class="fa fa-file-excel-o mr-2"></i>选择数据集
-            <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" class="hidden">
-          </label>
+          <!-- 文件列表 -->
+          <div id="fileListContainer" class="mt-6 hidden relative">
+            <button id="clearAllBtn" class="absolute top-0 right-0 text-red-500 hover:text-red-700 text-sm font-medium transition-colors duration-200">
+              <i class="fa fa-trash mr-1"></i>清空所有
+            </button>
+            <div class="text-left mb-4 pr-20">
+              <!-- 移除了标题文本，只保留文件列表 -->
+            </div>
+            <div id="fileList" class="space-y-3 max-h-80 overflow-y-auto bg-gray-50 rounded-lg p-4">
+              <!-- 文件列表将在这里动态生成 -->
+            </div>
+          </div>
+
+          <div id="emptyState" class="mt-6 text-center">
+            <!-- 空状态只显示图标，不显示文本 -->
+          </div>
+
           <p id="fileInfo" class="mt-5 text-primary-green font-medium hidden flex items-center justify-center">
             <i class="fa fa-check-circle mr-2"></i>
             <span></span>
           </p>
+
           <div class="mt-6 text-sm text-gray-500">
             <i class="fa fa-info-circle mr-1"></i>
-            支持格式: CSV, XLS, XLSX (最大支持20MB)
+            支持格式: CSV, XLS, XLSX (最大支持20MB)，支持批量上传
           </div>
         </div>
+      </div>
+
+      <!-- 选择数据集按钮 -->
+      <div class="text-center mb-10">
+        <label class="bg-green-gradient text-white px-8 py-4 rounded-lg cursor-pointer hover:shadow-md transition-all duration-300 inline-block hover-lift font-medium">
+          <i class="fa fa-file-excel-o mr-2"></i>选择数据集
+          <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" multiple class="hidden">
+        </label>
       </div>
 
       <!-- 进度显示 -->
@@ -137,12 +169,23 @@
         </div>
       </div>
 
+      <!-- 成功提示 -->
+      <div id="successMessage" class="mb-10 hidden bg-green-50 border border-green-200 rounded-xl p-6 transform transition-all duration-500 hover:shadow-md success-message">
+        <div class="flex items-center">
+          <i class="fa fa-check-circle text-green-500 text-2xl mr-3"></i>
+          <div>
+            <h3 class="text-green-800 font-medium">报告生成成功！</h3>
+            <p class="text-green-600 text-sm mt-1">您的数据报告已准备就绪，点击下方按钮即可下载</p>
+          </div>
+        </div>
+      </div>
+
       <!-- 操作按钮 -->
       <div class="flex flex-col sm:flex-row justify-center gap-4 mb-8">
         <button id="submitBtn" class="bg-green-gradient text-white px-10 py-4 rounded-lg hover:shadow-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed font-medium disabled:shadow-none hover-lift flex items-center justify-center" disabled>
           <i class="fa fa-cog mr-2"></i>生成报告
         </button>
-        <button id="downloadBtn" class="bg-gradient-to-r from-medium-green to-dark-green text-white px-10 py-4 rounded-lg hover:shadow-lg transition-all duration-300 hidden font-medium hover-lift flex items-center justify-center">
+        <button id="downloadBtn" class="bg-gradient-to-r from-medium-green to-dark-green text-white px-10 py-4 rounded-lg hover:shadow-lg transition-all duration-300 hidden font-medium hover-lift flex items-center justify-center" style="opacity: 1 !important; background: linear-gradient(to right, #34d399, #059669) !important;">
           <i class="fa fa-download mr-2"></i>下载报告包
         </button>
       </div>
@@ -180,7 +223,11 @@
     const progressBar = document.getElementById('progressBar');
     const progressPercent = document.getElementById('progressPercent');
     const progressStatus = document.getElementById('progressStatus');
-    let selectedFile = null;
+    const successMessage = document.getElementById('successMessage');
+    const fileListContainer = document.getElementById('fileListContainer');
+    const fileList = document.getElementById('fileList');
+    const clearAllBtn = document.getElementById('clearAllBtn');
+    let selectedFiles = [];
 
     // 拖拽事件处理
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -202,78 +249,197 @@
 
     function highlight() {
       dropArea.classList.add('border-primary-green', 'bg-green-50/70');
-      dropArea.querySelector('i').classList.add('scale-110', 'transition-transform', 'duration-300');
+      const uploadIcon = document.getElementById('uploadIcon');
+      if (uploadIcon) {
+        uploadIcon.classList.remove('opacity-30');
+        uploadIcon.classList.add('opacity-70', 'scale-110', 'transition-transform', 'duration-300');
+      }
     }
 
     function unhighlight() {
       dropArea.classList.remove('border-primary-green', 'bg-green-50/70');
-      dropArea.querySelector('i').classList.remove('scale-110');
+      const uploadIcon = document.getElementById('uploadIcon');
+      if (uploadIcon) {
+        uploadIcon.classList.remove('opacity-70', 'scale-110');
+        uploadIcon.classList.add('opacity-30');
+      }
     }
 
     // 处理文件拖放
     dropArea.addEventListener('drop', handleDrop, false);
     function handleDrop(e) {
       const dt = e.dataTransfer;
-      const file = dt.files[0];
-      handleFiles(file);
+      const files = dt.files;
+      handleFiles(files);
     }
 
     // 处理文件选择
     fileInput.addEventListener('change', function() {
-      handleFiles(this.files[0]);
+      handleFiles(this.files);
     });
 
     // 点击上传区域触发文件选择
-    dropArea.addEventListener('click', () => {
-      if (!selectedFile) {
-        fileInput.click();
-      }
+    dropArea.addEventListener('click', (e) => {
+      // 如果点击的是label元素，不触发额外事件，因为label已经会触发input
+      if (e.target.tagName === 'LABEL' || e.target.closest('label')) return;
+      
+      fileInput.click();
     });
 
     // 文件验证与显示
-    function handleFiles(file) {
-      if (!file) return;
-      
-      // 验证文件大小
-      if (file.size > 20 * 1024 * 1024) {
-        alert('文件大小不能超过20MB');
-        return;
-      }
-      
-      // 验证文件类型
-      const validTypes = ['text/csv', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
-      const validExtensions = ['.csv', '.xls', '.xlsx'];
-      const fileName = file.name.toLowerCase();
-      const isExtensionValid = validExtensions.some(ext => fileName.endsWith(ext));
-      
-      if (!validTypes.includes(file.type) && !isExtensionValid) {
-        alert('请上传CSV或Excel格式的文件');
-        return;
-      }
-      
-      selectedFile = file;
-      fileInfo.textContent = `${file.name} (${(file.size / 1024).toFixed(1)}KB)`;
-      fileInfo.parentElement.classList.remove('hidden');
-      submitBtn.removeAttribute('disabled');
-      
-      // 添加文件选择动画
-      fileInfo.parentElement.classList.add('animate-pulse');
-      setTimeout(() => {
-        fileInfo.parentElement.classList.remove('animate-pulse');
-      }, 1000);
+    function handleFiles(files) {
+      if (!files || files.length === 0) return;
+
+      // 转换为数组
+      const filesArray = Array.from(files);
+
+      // 验证每个文件
+      const validFiles = filesArray.filter(file => {
+        // 验证文件大小
+        if (file.size > 20 * 1024 * 1024) {
+          alert(`文件 ${file.name} 大小超过20MB，已跳过`);
+          return false;
+        }
+
+        // 验证文件类型
+        const validTypes = ['text/csv', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+        const validExtensions = ['.csv', '.xls', '.xlsx'];
+        const fileName = file.name.toLowerCase();
+        const isExtensionValid = validExtensions.some(ext => fileName.endsWith(ext));
+
+        if (!validTypes.includes(file.type) && !isExtensionValid) {
+          alert(`文件 ${file.name} 不是CSV或Excel格式，已跳过`);
+          return false;
+        }
+
+        return true;
+      });
+
+      // 添加到已选择文件列表
+      selectedFiles = [...selectedFiles, ...validFiles];
+
+      // 更新文件列表显示
+      updateFileList();
     }
+
+    // 更新文件列表显示
+    function updateFileList() {
+      const emptyState = document.getElementById('emptyState');
+      const uploadIcon = document.getElementById('uploadIcon');
+
+      if (selectedFiles.length === 0) {
+        fileListContainer.classList.add('hidden');
+        fileInfo.parentElement.classList.add('hidden');
+        emptyState.classList.remove('hidden');
+        uploadIcon.classList.remove('hidden');
+        submitBtn.disabled = true;
+        return;
+      }
+
+      // 隐藏空状态和上传图标，显示文件列表容器
+      emptyState.classList.add('hidden');
+      uploadIcon.classList.add('hidden');
+      fileListContainer.classList.remove('hidden');
+
+      // 文件计数已移除，不再需要更新
+
+      // 清空文件列表
+      fileList.innerHTML = '';
+
+      // 添加每个文件到列表
+      selectedFiles.forEach((file, index) => {
+        const fileItem = document.createElement('div');
+        fileItem.className = 'flex items-center justify-between bg-gray-50 p-3 rounded-lg hover:bg-gray-100 transition-colors duration-200';
+
+        const fileIcon = document.createElement('div');
+        fileIcon.className = 'flex items-center mr-3';
+
+        // 根据文件类型添加不同图标
+        let iconClass = 'fa-file-o';
+        if (file.name.toLowerCase().endsWith('.csv')) {
+          iconClass = 'fa-file-excel-o';
+        } else if (file.name.toLowerCase().endsWith('.xls') || file.name.toLowerCase().endsWith('.xlsx')) {
+          iconClass = 'fa-file-excel-o';
+        }
+
+        fileIcon.innerHTML = `<i class="fa ${iconClass} text-primary-green mr-2"></i>`;
+
+        const fileName = document.createElement('div');
+        fileName.className = 'flex-grow truncate';
+        fileName.textContent = file.name;
+
+        const fileSize = document.createElement('div');
+        fileSize.className = 'text-sm text-gray-500 mr-3';
+        fileSize.textContent = `${(file.size / 1024).toFixed(1)}KB`;
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'text-red-500 hover:text-red-700 transition-colors duration-200';
+        deleteBtn.innerHTML = '<i class="fa fa-times-circle"></i>';
+        deleteBtn.addEventListener('click', (e) => {
+          e.stopPropagation(); // 阻止事件冒泡
+          selectedFiles.splice(index, 1);
+          updateFileList();
+        });
+
+        fileItem.appendChild(fileIcon);
+        fileItem.appendChild(fileName);
+        fileItem.appendChild(fileSize);
+        fileItem.appendChild(deleteBtn);
+
+        fileList.appendChild(fileItem);
+      });
+
+      // 更新文件信息显示
+      if (selectedFiles.length === 1) {
+        fileInfo.textContent = `${selectedFiles[0].name} (${(selectedFiles[0].size / 1024).toFixed(1)}KB)`;
+      } else {
+        fileInfo.textContent = `已选择 ${selectedFiles.length} 个文件`;
+      }
+      fileInfo.parentElement.classList.remove('hidden');
+      submitBtn.disabled = false;
+    }
+
+    // 清空所有文件
+    clearAllBtn.addEventListener('click', function(e) {
+      e.stopPropagation(); // 阻止事件冒泡
+      selectedFiles = [];
+      updateFileList();
+    });
 
     // 提交文件到后端
     submitBtn.addEventListener('click', async function() {
-      if (!selectedFile) return;
+      if (!selectedFiles || selectedFiles.length === 0) return;
 
       const formData = new FormData();
-      formData.append('dataset', selectedFile);
+      selectedFiles.forEach(file => {
+        formData.append('datasets[]', file);
+      });
 
       try {
         progressContainer.classList.remove('hidden');
+        successMessage.classList.add('hidden');
         submitBtn.disabled = true;
-        
+        downloadBtn.classList.add('hidden');
+
+        // 模拟进度更新
+        let progress = 0;
+        const progressInterval = setInterval(() => {
+          progress += Math.random() * 15;
+          if (progress > 90) progress = 90; // 最高到90%，等待完成
+
+          progressBar.style.width = `${progress}%`;
+          progressPercent.textContent = `${Math.round(progress)}%`;
+
+          // 更新状态文本
+          if (progress < 30) {
+            progressStatus.textContent = '读取数据...';
+          } else if (progress < 60) {
+            progressStatus.textContent = '分析数据...';
+          } else if (progress < 90) {
+            progressStatus.textContent = '生成报告...';
+          }
+        }, 500);
+
         const response = await fetch('/api/generate-report', {
           method: 'POST',
           body: formData,
@@ -282,6 +448,11 @@
           },
           signal: AbortSignal.timeout(300000) // 5分钟超时
         });
+
+        clearInterval(progressInterval);
+        progressBar.style.width = '100%';
+        progressPercent.textContent = '100%';
+        progressStatus.textContent = '处理完成';
 
         if (!response.ok) throw new Error('处理失败');
 
@@ -304,17 +475,36 @@
         // 生成下载URL
         const blob = new Blob(chunks, { type: 'application/zip' });
         const url = URL.createObjectURL(blob);
-        
-        // 显示下载按钮
+
+        // 显示成功消息和下载按钮
+        successMessage.classList.remove('hidden');
         downloadBtn.classList.remove('hidden');
+
+        // 生成下载文件名
+        let downloadName;
+        if (selectedFiles.length === 1) {
+          downloadName = `${selectedFiles[0].name.split('.')[0]}_数据报告.zip`;
+        } else {
+          downloadName = `批量数据报告_${selectedFiles.length}个数据集_${new Date().getTime()}.zip`;
+        }
+
+        // 直接触发下载，不需要点击按钮
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = downloadName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        // 下载按钮点击事件（备用）
         downloadBtn.onclick = () => {
           const a = document.createElement('a');
           a.href = url;
-          a.download = `数据报告_${new Date().getTime()}.zip`;
+          a.download = downloadName;
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
-          URL.revokeObjectURL(url); // 释放资源
+          // 不释放URL，以便备用下载按钮也能工作
         };
 
       } catch (error) {
@@ -323,12 +513,6 @@
         progressContainer.classList.add('hidden');
         submitBtn.disabled = false;
       }
-    });
-    
-    // 下载按钮点击事件
-    downloadBtn.addEventListener('click', function() {
-      // 实际项目中会由上面的API请求设置点击事件
-      alert('报告下载中...（模拟）');
     });
   </script>
 </body>
