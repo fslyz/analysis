@@ -61,70 +61,76 @@ async def main():
         print(f"数据应用场景已保存至: {application_path}")
     else:
         print("数据应用处理结果为空，未能保存")
-    
+
     # 新增：打印数据清洗结果（results[4]对应数据清洗任务的返回值）
     print("\n数据清洗处理结果：")
     print(results[4])
-    
+
     print("所有结果保存完成！")
 
 def process_dataset(file_path, original_name=None):
     """
     处理上传的数据集，生成五个报告
     返回报告文件路径列表
-    
+
     参数:
         file_path: 数据集文件路径
         original_name: 原始文件名（不含扩展名），用于命名报告文件
     """
     # 1. 读取数据集
     df, dataset_name = read_file_data(file_path)
-    
+
     # 如果提供了原始文件名，则使用它来替代dataset_name
     if original_name:
         dataset_name = original_name
-    
+
     # 2. 初始化数据清洗处理器
     data_processor = DataProcessor()
-    
+
     # 3. 处理算法规则表
     algorithm_result = algorithm_analyze(dataset_name, dataframe=df)
     algorithm_path = None
     if algorithm_result:
         algorithm_path = algorithm_save(algorithm_result, dataset_name)
-    
+
     # 4. 处理数据收集情况
     collection_result = collection_analyze(dataset_name, dataframe=df)
     collection_path = None
     if collection_result:
         collection_path = collection_save(collection_result, dataset_name)
-    
+
     # 5. 处理数据字典
     dictionary_result = dictionary_analyze(dataset_name, dataframe=df)
     dictionary_path = None
     if dictionary_result:
         dictionary_path = dictionary_save(dictionary_result, dataset_name)
-    
+
     # 6. 处理数据应用场景
     application_result = application_analyze(dataset_name, dataframe=df)
     application_path = None
     if application_result:
         application_path = application_save(application_result, dataset_name)
-    
-    # 7. 数据清洗处理（但不生成报告文件）
-    # 只执行数据清洗，但不保存清洗报告
-    data_processor.process_dataset(file_path, original_name)
-    
-    # 查找样本示例文件（现在应该已经使用正确的名称）
+
+    # 7. 数据清洗处理
+    # 执行数据清洗并获取结果
+    try:
+        cleaning_result = data_processor.process_dataset(file_path, original_name)
+        print(f"数据清洗结果: {cleaning_result}")
+    except Exception as e:
+        print(f"数据清洗处理出错: {str(e)}")
+
+    # 查找样本示例文件
     data_dir = "F:\\analysis\\data"  # 确认data目录
     sample_path = None
     expected_sample_path = os.path.join(data_dir, f"{dataset_name}_样本示例.pdf")
-    
+
     # 检查样本示例文件是否存在
     if os.path.exists(expected_sample_path):
         sample_path = expected_sample_path
         print(f"找到样本示例文件: {sample_path}")
-    
+    else:
+        print(f"未找到样本示例文件: {expected_sample_path}")
+
     # 8. 返回所有生成的报告路径
     report_paths = []
     if algorithm_path:
@@ -137,7 +143,7 @@ def process_dataset(file_path, original_name=None):
         report_paths.append(application_path)
     if sample_path:
         report_paths.append(sample_path)
-    
+
     return report_paths
 
 if __name__ == "__main__":
