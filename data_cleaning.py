@@ -5,6 +5,7 @@ import os
 import sqlite3
 import tempfile
 import time
+import re
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 from openpyxl import Workbook
@@ -14,6 +15,10 @@ from openpyxl.utils import get_column_letter
 import win32com.client as win32
 import pythoncom
 from fpdf import FPDF
+import threading
+
+# 创建全局锁用于Excel COM操作
+excel_lock = threading.Lock()
 
 # API配置
 API_KEY = "sk-062b1fc6f6a9425eae59020faa7b5f6e"
@@ -116,7 +121,7 @@ class DataProcessor:
             return f"获取基本信息失败: {str(e)}"
 
     def get_missing_value_analysis(self, table_name):
-        """缺失值分析 - 修复版本"""
+        """缺失值分析"""
         try:
             column_info = pd.read_sql_query(f"PRAGMA table_info({table_name})", self.raw_connection)
             result = "缺失值分析:\n"
@@ -139,7 +144,7 @@ class DataProcessor:
             return f"缺失值分析失败: {str(e)}"
 
     def get_duplicate_analysis(self, table_name):
-        """重复数据分析 - 修复版本"""
+        """重复数据分析"""
         try:
             column_info = pd.read_sql_query(f"PRAGMA table_info({table_name})", self.raw_connection)
             
@@ -185,7 +190,7 @@ class DataProcessor:
             return f"重复数据分析失败: {str(e)}"
 
     def get_numeric_analysis(self, table_name):
-        """数值列分析 - 修复版本"""
+        """数值列分析"""
         try:
             column_info = pd.read_sql_query(f"PRAGMA table_info({table_name})", self.raw_connection)
             result = "数值列分析:\n"
@@ -228,7 +233,7 @@ class DataProcessor:
             return f"数值列分析失败: {str(e)}"
 
     def get_text_analysis(self, table_name):
-        """文本列分析 - 修复版本"""
+        """文本列分析"""
         try:
             column_info = pd.read_sql_query(f"PRAGMA table_info({table_name})", self.raw_connection)
             result = "文本列分析:\n"
@@ -266,6 +271,37 @@ class DataProcessor:
             return result
         except Exception as e:
             return f"文本列分析失败: {str(e)}"
+
+    def get_privacy_analysis(self, table_name):
+        """获取隐私信息分析（优化版）"""
+        try:
+            # 读取前5行数据（包含字段名）
+            sample_df = pd.read_sql_query(f"SELECT * FROM {table_name} LIMIT 5", self.raw_connection)
+            
+            # 简洁提示词，减少大模型交互时间
+            privacy_prompt = f"""
+            仅识别包含隐私信息的字段，隐私包括：人名、公司名称、地址。
+            数据样本：{sample_df.to_string()}
+            输出格式：用逗号分隔字段名，无则空。
+            """
+            
+            response = self.llm.invoke([
+                SystemMessage(content="仅返回隐私字段名，不解释"),
+                HumanMessage(content=privacy_prompt)
+            ])
+            
+            # 解析结果
+            privacy_columns = [col.strip() for col in response.content.split(',') if col.strip()]
+            result = "隐私信息分析:\n"
+            result += f"  隐私字段: {', '.join(privacy_columns) or '无'}\n"
+            
+            # 补充样本说明
+            for col in privacy_columns:
+                result += f"  - {col}: {sample_df[col].dropna().unique()[:3]}\n"
+                
+            return result, privacy_columns
+        except Exception as e:
+            return f"隐私分析失败: {str(e)}", []
 
     def _create_temp_excel(self, df, max_rows=200):
         """创建临时Excel（优化格式）"""
@@ -373,42 +409,44 @@ class DataProcessor:
 
     def _excel_to_pdf_via_com(self, excel_path, pdf_path, max_rows):
         """Windows专用：Excel COM转换PDF"""
-        pythoncom.CoInitialize()
-        try:
-            excel = win32.gencache.EnsureDispatch('Excel.Application')
-            excel.Visible = False
-            workbook = excel.Workbooks.Open(
-                Filename=os.path.abspath(excel_path),
-                ReadOnly=True
-            )
-            worksheet = workbook.ActiveSheet
+        # 使用线程锁确保同时只有一个线程访问Excel COM组件
+        with excel_lock:
+            pythoncom.CoInitialize()
+            try:
+                excel = win32.gencache.EnsureDispatch('Excel.Application')
+                excel.Visible = False
+                workbook = excel.Workbooks.Open(
+                    Filename=os.path.abspath(excel_path),
+                    ReadOnly=True
+                )
+                worksheet = workbook.ActiveSheet
 
-            # 限制最大行数
-            total_rows = worksheet.UsedRange.Rows.Count
-            if total_rows > max_rows:
-                for row in range(max_rows + 1, total_rows + 1):
-                    worksheet.Rows(row).Hidden = True
+                # 限制最大行数
+                total_rows = worksheet.UsedRange.Rows.Count
+                if total_rows > max_rows:
+                    for row in range(max_rows + 1, total_rows + 1):
+                        worksheet.Rows(row).Hidden = True
 
-            # 关键设置：纵向分页
-            worksheet.PageSetup.Orientation = 1  # 纵向
-            worksheet.PageSetup.FitToPagesWide = 1  # 宽度适配1页
-            worksheet.PageSetup.PrintTitleRows = "$1:$1"  # 每页显示表头
+                # 关键设置：纵向分页
+                worksheet.PageSetup.Orientation = 1  # 纵向
+                worksheet.PageSetup.FitToPagesWide = 1  # 宽度适配1页
+                worksheet.PageSetup.PrintTitleRows = "$1:$1"  # 每页显示表头
 
-            # 导出PDF
-            worksheet.ExportAsFixedFormat(
-                Type=0,
-                Filename=os.path.abspath(pdf_path)
-            )
+                # 导出PDF
+                worksheet.ExportAsFixedFormat(
+                    Type=0,
+                    Filename=os.path.abspath(pdf_path)
+                )
 
-            workbook.Close(False)
-            excel.Quit()
-            print(f"PDF生成成功: {pdf_path}")
-            return True
-        except Exception as e:
-            print(f"COM转换出错: {str(e)}")
-            return False
-        finally:
-            pythoncom.CoUninitialize()
+                workbook.Close(False)
+                excel.Quit()
+                print(f"PDF生成成功: {pdf_path}")
+                return True
+            except Exception as e:
+                print(f"COM转换出错: {str(e)}")
+                return False
+            finally:
+                pythoncom.CoUninitialize()
 
     def _excel_to_pdf_via_fpdf(self, excel_path, pdf_path, max_rows):
         """非Windows系统：FPDF转换PDF"""
@@ -468,7 +506,134 @@ class DataProcessor:
         except Exception as e:
             print(f"FPDF转换出错: {str(e)}")
             return False
-
+    
+    def _analyze_privacy_data(self, table_name, privacy_columns):
+        """分析隐私数据并生成保护SQL"""
+        if not privacy_columns:
+            return "未发现需要隐私保护的列"
+        
+        try:
+            # 获取每列的样本数据
+            sample_data = {}
+            for col in privacy_columns:
+                sample_query = f"SELECT `{col}` FROM {table_name} WHERE `{col}` IS NOT NULL LIMIT 5"
+                sample_result = pd.read_sql_query(sample_query, self.raw_connection)
+                sample_values = sample_result[col].tolist()
+                sample_data[col] = sample_values
+            
+            # 使用大模型分析隐私数据类型
+            privacy_prompt = f"""
+            请分析以下数据样本，仅识别姓名、地址和名称这三类隐私信息，并提供隐藏建议：
+            
+            表名: {table_name}
+            
+            列样本数据:
+            {chr(10).join(f"{k}: {v}" for k, v in sample_data.items())}
+            
+            请提供：
+            1. 每列的隐私信息类型（仅限：人名、公司名称、地址）
+            2. 隐藏建议
+            3. 隐藏SQL语句（前缀"PRIVACY SQL:"），使用SQLite语法
+            """
+            
+            messages = [
+                SystemMessage(content="专业隐私保护顾问，擅长识别和保护各类隐私信息"),
+                HumanMessage(content=privacy_prompt)
+            ]
+            
+            response = self.llm.invoke(messages)
+            return response.content
+        except Exception as e:
+            return f"分析隐私数据失败: {str(e)}"
+    
+    def _apply_privacy_protection(self, table_name, privacy_sql):
+        """应用隐私保护SQL"""
+        if not privacy_sql or "PRIVACY SQL:" not in privacy_sql:
+            return False
+        
+        try:
+            # 提取SQL语句
+            sql_start = privacy_sql.find("PRIVACY SQL:") + len("PRIVACY SQL:")
+            sql_content = privacy_sql[sql_start:].strip()
+            
+            # 处理可能的多行SQL，去除代码块标记
+            if sql_content.startswith("```sql"):
+                sql_content = sql_content[6:]
+            if sql_content.endswith("```"):
+                sql_content = sql_content[:-3]
+            
+            # 分割SQL语句并执行
+            sql_statements = [stmt.strip() for stmt in sql_content.split(";") if stmt.strip()]
+            
+            for sql in sql_statements:
+                # 跳过注释行
+                if sql.startswith("--") or sql.startswith("/*"):
+                    continue
+                
+                # 处理包含特殊字符的列名
+                column_info = pd.read_sql_query(f"PRAGMA table_info({table_name})", self.raw_connection)
+                column_names = [row['name'] for _, row in column_info.iterrows()]
+                
+                # 为包含特殊字符的列名添加反引号
+                for col_name in column_names:
+                    if any(c in col_name for c in "/\\- .,()[]{}'\"") and not col_name.startswith('`'):
+                        pattern = r'\b' + re.escape(col_name) + r'\b'
+                        replacement = f'`{col_name}`'
+                        sql = re.sub(pattern, replacement, sql)
+                
+                # 执行SQL
+                print(f"执行SQL: {sql}")
+                self.raw_connection.execute(sql)
+            
+            self.raw_connection.commit()
+            return True
+        except Exception as e:
+            print(f"应用隐私保护失败: {str(e)}")
+            # 尝试使用更简单的方法处理
+            try:
+                print("尝试使用简化方法处理隐私数据...")
+                # 获取隐私列
+                privacy_columns = [col for col in column_names if any(p in col.lower() for p in ['姓名', '公司', '地址'])]
+                
+                for col in privacy_columns:
+                    # 获取列数据样本
+                    df = pd.read_sql(f"SELECT `{col}` FROM {table_name}", self.raw_connection)
+                    sample_values = df[col].dropna().unique()[:5].tolist()
+                    
+                    # 生成简单替换规则
+                    simple_prompt = f"""
+                    为以下列生成简单的隐私保护规则（只输出替换规则）：
+                    列名: {col}
+                    样本数据: {sample_values}
+                    规则格式：原值 -> 替换值
+                    """
+                    
+                    response = self.llm.invoke([
+                        SystemMessage(content="专业隐私保护顾问"),
+                        HumanMessage(content=simple_prompt)
+                    ])
+                    
+                    # 解析并应用替换规则
+                    for line in response.content.split('\n'):
+                        if '->' in line:
+                            original, replacement = line.split('->', 1)
+                            original = original.strip()
+                            replacement = replacement.strip()
+                            
+                            if original and replacement:
+                                try:
+                                    update_sql = f"UPDATE {table_name} SET `{col}` = ? WHERE `{col}` = ?"
+                                    self.raw_connection.execute(update_sql, (replacement, original))
+                                except Exception as update_error:
+                                    print(f"更新值失败: {str(update_error)}")
+                
+                self.raw_connection.commit()
+                print("简化方法处理完成")
+                return True
+            except Exception as simple_error:
+                print(f"简化方法也失败: {str(simple_error)}")
+                return False
+    
     def _analyze_and_generate_sql(self, query_results, table_name):
         """分析数据并生成清洗SQL"""
         print("===== 分析数据质量 =====")
@@ -483,6 +648,7 @@ class DataProcessor:
         重复数据：{query_results.get('重复数据分析', '无')}
         数值列：{query_results.get('数值列分析', '无')}
         文本列：{query_results.get('文本列分析', '无')}
+        隐私信息：{query_results.get('隐私信息分析', '无')}
 
         请提供：
         1. 数据集概述
@@ -510,57 +676,57 @@ class DataProcessor:
         self.current_table_name = None
 
     def process_dataset(self, file_path, original_name=None):
-        """主流程
-        
-        参数:
-            file_path: 数据集文件路径
-            original_name: 原始文件名（不含扩展名），用于命名报告文件
-        """
+        """优化后的主流程"""
         temp_excel = None
         start_time = time.time()
         try:
-            # 创建内存数据库
-            db_result = self.create_in_memory_db(file_path)
-            if not isinstance(db_result, tuple) or len(db_result) < 2:
-                return db_result[1] if isinstance(db_result, tuple) else str(db_result)
-
-            df, table_name = db_result
-
-            print("===== 开始执行数据查询 =====")
-
-            # 同步执行查询
+            # 初始化数据库
+            df, table_name = self.create_in_memory_db(file_path)
+            if not table_name:  # 处理错误情况
+                return df  # df实际为错误信息
+            
+            # 同步执行所有分析（含隐私分析）
             query_results = {}
+            analysis_steps = [
+                ("基本信息", self.get_basic_info),
+                ("缺失值分析", self.get_missing_value_analysis),
+                ("重复数据分析", self.get_duplicate_analysis),
+                ("数值列分析", self.get_numeric_analysis),
+                ("文本列分析", self.get_text_analysis),
+                ("隐私信息分析", self.get_privacy_analysis)  # 新增步骤
+            ]
             
-            print("===== 执行查询：基本信息 =====")
-            query_results['基本信息'] = self.get_basic_info(table_name)
-            
-            print("===== 执行查询：缺失值分析 =====")
-            query_results['缺失值分析'] = self.get_missing_value_analysis(table_name)
-            
-            print("===== 执行查询：重复数据分析 =====")
-            query_results['重复数据分析'] = self.get_duplicate_analysis(table_name)
-            
-            print("===== 执行查询：数值列分析 =====")
-            query_results['数值列分析'] = self.get_numeric_analysis(table_name)
-            
-            print("===== 执行查询：文本列分析 =====")
-            query_results['文本列分析'] = self.get_text_analysis(table_name)
+            # 批量执行分析步骤，减少重复代码
+            privacy_columns = []
+            for name, method in analysis_steps:
+                print(f"===== 执行查询：{name} =====")
+                if name == "隐私信息分析":
+                    # 特殊处理隐私分析（返回两个值）
+                    result, privacy_columns = method(table_name)
+                else:
+                    result = method(table_name)
+                query_results[name] = result
 
-            # 分析并生成清洗SQL
+            # 生成清洗SQL（包含所有分析结果）
             analysis_result = self._analyze_and_generate_sql(query_results, table_name)
+            
+            # 隐私保护处理（仅在有隐私列时执行）
+            if privacy_columns:
+                print(f"===== 应用隐私保护：{privacy_columns} =====")
+                privacy_detail = self._analyze_privacy_data(table_name, privacy_columns)
+                self._apply_privacy_protection(table_name, privacy_detail)
+            else:
+                print("===== 无隐私字段，跳过保护步骤 =====")
 
-            # 获取最终数据
+            # 生成输出文件
             final_df = pd.read_sql(f"SELECT * FROM {table_name}", self.raw_connection)
-
-            # 生成PDF
             temp_excel = self._create_temp_excel(final_df)
             if not temp_excel:
                 return "生成PDF失败：临时Excel创建失败"
 
-            # 使用原始文件名或从文件路径提取的名称
-            base_name = original_name if original_name else os.path.splitext(os.path.basename(file_path))[0]
+            # 保存PDF
+            base_name = original_name or os.path.splitext(os.path.basename(file_path))[0]
             pdf_path = os.path.join(OUTPUT_PATH, f"{base_name}_样本示例.pdf")
-
             pdf_success = self._excel_to_pdf(temp_excel, pdf_path)
 
             # 清理资源
@@ -568,37 +734,24 @@ class DataProcessor:
             if temp_excel and os.path.exists(temp_excel):
                 os.remove(temp_excel)
 
-            # 计算总运行时间
-            end_time = time.time()
-            total_time = end_time - start_time
-            
-            if pdf_success:
-                return f"""
-===== 处理完成 =====
-
+            # 输出结果
+            total_time = time.time() - start_time
+            return f"""===== 处理完成 =====
 1. 查询结果:
 {chr(10).join(f'{k}:\n{v}\n' for k, v in query_results.items())}
 
 2. 分析与清洗建议:
 {analysis_result}
 
-3. 输出文件:
-{pdf_path}
+3. 输出文件: {pdf_path if pdf_success else 'PDF生成失败'}
+4. 运行时间: {total_time:.2f} 秒"""
 
-4. 运行时间:
-总耗时: {total_time:.2f} 秒
-"""
         except Exception as e:
-            end_time = time.time()
-            total_time = end_time - start_time
-            
+            # 错误处理
             self._cleanup_connections()
             if temp_excel and os.path.exists(temp_excel):
-                try:
-                    os.remove(temp_excel)
-                except:
-                    pass
-            return f"处理出错: {str(e)}\n运行时间: {total_time:.2f} 秒"
+                os.remove(temp_excel)
+            return f"处理出错: {str(e)}\n运行时间: {time.time()-start_time:.2f} 秒"
 
 if __name__ == "__main__":
     processor = DataProcessor()
