@@ -6,6 +6,7 @@ from config import DEFAULT_OUTPUT_DIR, MODEL_NAME
 
 # 初始化模型和链
 chat = ChatOpenAI(model=MODEL_NAME)
+#将语言模型的输出转换为字符串格式，确保输出是文本形式，便于后续处理，可以处理不同类型的输入并统一转换为字符串
 output_parser = StrOutputParser()
 
 # 定义提示词模板
