@@ -7,7 +7,7 @@ from config import API_KEY, API_BASE, MODEL_NAME
 
 def read_data(file_path):
     """
-    读取数据文件（支持.xlsx和.csv格式），返回数据框
+    读取数据文件（支持.xlsx、.xls和.csv格式），返回数据框
     参数:
         file_path: 数据文件的完整路径
     返回:
@@ -28,13 +28,24 @@ def read_data(file_path):
             except Exception as e2:
                 print(f"使用默认引擎读取Excel文件也失败: {e2}")
                 raise
+    elif ext == ".xls":
+        try:
+            return pd.read_excel(file_path, engine="xlrd")
+        except Exception as e:
+            print(f"读取旧版Excel文件出错: {e}")
+            # 尝试使用默认引擎
+            try:
+                return pd.read_excel(file_path)
+            except Exception as e2:
+                print(f"使用默认引擎读取旧版Excel文件也失败: {e2}")
+                raise
     elif ext == ".csv":
         # 自动检测编码并读取CSV
         with open(file_path, 'rb') as f:
             encoding = chardet.detect(f.read(10000))['encoding']
         return pd.read_csv(file_path, encoding=encoding)
     else:
-        raise ValueError(f"不支持的文件格式({ext})，请使用.xlsx或.csv文件")
+        raise ValueError(f"不支持的文件格式({ext})，请使用.xlsx、.xls或.csv文件")
 
 def setup_sql_database(df):
     """将DataFrame加载到临时SQLite数据库并返回连接对象和文件路径"""
